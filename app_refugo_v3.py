@@ -1,6 +1,6 @@
 """Projeção do refugo (PPM) final do ano — BU1 SA.
 
-Executar:  streamlit run app.py
+Executar:  streamlit run app_refugo_v3.py
 """
 import hashlib
 from datetime import date

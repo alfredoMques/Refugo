@@ -1,0 +1,12 @@
+# Dados reais (não versionar)
+*.xlsx
+*.xls
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Streamlit
+.streamlit/secrets.toml

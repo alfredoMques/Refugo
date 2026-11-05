@@ -25,6 +25,27 @@ ESCALA_PPM = [[0, "#1a9850"], [0.25, "#91cf60"], [0.5, "#f7f7f2"], [0.75, "#fc8d
 
 st.set_page_config(page_title="Projeção Refugo", page_icon="📉", layout="wide")
 
+# --------------------------------------------------------------------------- tema (modo noturno)
+# O Streamlit não tem API pública para trocar o tema em tempo de execução: alteramos as opções
+# theme.* e reexecutamos, para que o navegador receba o novo tema no início da próxima execução.
+# As cores explícitas garantem que o navegador perceba a troca também ao voltar para o tema claro.
+TEMAS = {
+    "light": {"base": "light", "backgroundColor": "#ffffff", "secondaryBackgroundColor": "#f0f2f6",
+              "textColor": "#31333f"},
+    "dark": {"base": "dark", "backgroundColor": "#0e1117", "secondaryBackgroundColor": "#262730",
+             "textColor": "#fafafa"},
+}
+DARK = st.sidebar.toggle("🌙 Modo noturno", key="tema_escuro",
+                         help="Alterna entre o tema claro e o escuro (telas, tabelas e gráficos).")
+_tema = "dark" if DARK else "light"
+if st._config.get_option("theme.base") != _tema:
+    for _k, _v in TEMAS[_tema].items():
+        st._config.set_option(f"theme.{_k}", _v)
+    st.rerun()
+if DARK:  # linhas de referência precisam de contraste no fundo escuro
+    COR_TARGET = "#b8b7b0"
+    COR_REGIAO = "#f0efe9"
+
 
 # --------------------------------------------------------------------------- dados
 TEMPLATE_START = 2020  # primeiro ano do template padrão
@@ -417,7 +438,8 @@ ppm_method = st.sidebar.radio(
 
 if st.sidebar.button("↺ Restaurar padrões", width="stretch"):
     for k in list(st.session_state.keys()):
-        del st.session_state[k]
+        if k != "tema_escuro":  # mantém a escolha do modo noturno
+            del st.session_state[k]
     st.rerun()
 
 prod_base, prod_cols = base_production(hist_prod, timeline, proj_year, data["projected"], plants,
@@ -1175,16 +1197,63 @@ with tab3:
 
 # =========================================================================== TELA 4
 with tab4:
-    if not HAS_PROJ:
-        st.info(f"Não há meses projetados em {proj_year} — análise disponível apenas para anos em andamento.")
+    # Período simulado: o ano inteiro (real + projetado) ou um único mês do ano da projeção
+    sim_mode = st.segmented_control("Período da simulação", ["📅 Ano", "🗓️ Mês"], default="📅 Ano",
+                                    key="sim_mode", help="Ano: refugo do ano inteiro (real + projetado). "
+                                                         "Mês: refugo de um único mês (realizado ou projetado).")
+    SIM_MES = sim_mode == "🗓️ Mês"
+    if SIM_MES:
+        _opts = {f"{MESES[m - 1]}/{proj_year} — " + ("realizado" if m in data["realized"] else "projetado"): m
+                 for m in range(1, 13)}
+        _def = data["projected"][0] if HAS_PROJ else data["realized"][-1]
+        sim_m = _opts[st.selectbox("Mês simulado", list(_opts), index=_def - 1, key="sim_month")]
+        sim_m_real = sim_m in data["realized"]
+    if not (HAS_PROJ or SIM_MES):
+        st.info(f"Não há meses projetados em {proj_year} — a simulação do ano só se aplica a anos em andamento. "
+                "Use a simulação por 🗓️ Mês para analisar um mês realizado.")
     else:
-        st.caption("Eixos = PPM anual de cada planta (refugo do ano real + projetado ÷ produção do ano × 10⁶). A produção fica fixa na projeção atual; "
-                   "as plantas não selecionadas ficam no cenário atual (tabela de variação). "
-                   "Fronteira = combinações em que o PPM da BU1 SA fica exatamente no target.")
+        # Grandezas do período simulado, por planta:
+        #   s_real = parte fixa (refugo já realizado), s_base = refugo variável com variação 0,
+        #   s_prod = produção do período. Refugo do período = s_real + s_base × (1 + variação).
+        if SIM_MES:
+            _, _scrap0 = project(data, prod_base, ppm_b, weights, pd.Series(0.0, index=plants))
+            s_real = pd.Series(0.0, index=plants)
+            s_base = (data["scrap"] if sim_m_real else _scrap0)[sim_m].astype(float)
+            s_prod = prod[sim_m].astype(float)
+            s_cur = scrap[sim_m].astype(float)
+            if HAS_PREV:
+                _pp, _ps = prev["prod"][sim_m], prev["scrap"][sim_m]
+                s_prev_ppm = (_ps / _pp * 1e6).reindex(plants)
+                s_prev_ppm.loc[REGION] = _ps.sum(min_count=len(plants)) / _pp.sum(min_count=len(plants)) * 1e6
+            else:
+                s_prev_ppm = pd.Series(np.nan, index=plants + [REGION])
+            PER = f"{MESES[sim_m - 1]}/{proj_year}"  # rótulo do período
+            C_REF, C_PROD, U_PER = "Refugo mês", "Produção mês", "mês"
+            VAR_TXT = "realizado" if sim_m_real else "projetado"
+        else:
+            s_real, s_base, s_prod = real_scrap, proj_scrap0, prod_year
+            s_cur = real_scrap + proj_scrap0 * (1 + variation)
+            s_prev_ppm = prev_ppm
+            PER = str(proj_year)
+            C_REF, C_PROD, U_PER = "Refugo ano", "Produção ano", "ano"
+            VAR_TXT = "projetado"
+        MODE_TAG = f"m{sim_m}" if SIM_MES else "ano"
+        MAN_KEY = f"sim_manual_{MODE_TAG}"
+
+        if SIM_MES:
+            st.caption(f"Eixos = PPM de cada planta em **{PER}** (refugo do mês ÷ produção do mês × 10⁶). "
+                       + ("Mês realizado: a produção é a real e a base do refugo é o valor real. " if sim_m_real else
+                          "Mês projetado: a produção e o refugo base vêm da projeção atual. ")
+                       + "As plantas não selecionadas ficam no cenário atual. "
+                         f"Fronteira = combinações em que o PPM da BU1 SA no mês fica exatamente no target.")
+        else:
+            st.caption("Eixos = PPM anual de cada planta (refugo do ano real + projetado ÷ produção do ano × 10⁶). A produção fica fixa na projeção atual; "
+                       "as plantas não selecionadas ficam no cenário atual (tabela de variação). "
+                       "Fronteira = combinações em que o PPM da BU1 SA fica exatamente no target.")
         s1, s2 = st.columns([2, 1])
         sim_pl = s1.multiselect("Plantas a combinar (2 = gráfico 2D, 3 = gráfico 3D)", plants,
                                 default=plants[:2], max_selections=3, key="sim_plants")
-        rr = s2.slider("Faixa dos eixos (variação do refugo projetado, %)", -100, 300, (-100, 50), step=5,
+        rr = s2.slider(f"Faixa dos eixos (variação do refugo {VAR_TXT}, %)", -100, 300, (-100, 50), step=5,
                        key="sim_range")
 
         if len(sim_pl) < 2:
@@ -1192,26 +1261,29 @@ with tab4:
         else:
             ss = st.session_state
             others = [p for p in plants if p not in sim_pl]
-            # Edições manuais da tabela "Valores no ponto analisado": planta -> refugo anual fixado
-            manual = ss.setdefault("sim_manual", {})
-            cur_annual = real_scrap + proj_scrap0 * (1 + variation)
+            # Edições manuais da tabela "Valores no ponto analisado": planta -> refugo do período fixado
+            # (separadas por modo: ano e cada mês têm as próprias edições)
+            manual = ss.setdefault(MAN_KEY, {})
+            cur_annual = s_cur.copy()
             for p, ed in manual.items():
                 if p not in sim_pl:
                     cur_annual[p] = ed["annual"]
-            total_prod = prod.sum().sum()
+            total_prod = s_prod.sum()
             allowed = region_target * total_prod / 1e6
             others_sum = cur_annual[others].sum()
             free = allowed - others_sum  # soma máxima das plantas selecionadas
-            lo = {p: real_scrap[p] + proj_scrap0[p] * (1 + rr[0] / 100) for p in sim_pl}
-            hi = {p: real_scrap[p] + proj_scrap0[p] * (1 + rr[1] / 100) for p in sim_pl}
+            lo = {p: s_real[p] + s_base[p] * (1 + rr[0] / 100) for p in sim_pl}
+            hi = {p: s_real[p] + s_base[p] * (1 + rr[1] / 100) for p in sim_pl}
             for p in sim_pl:  # amplia o eixo se o valor editado estiver fora da faixa
                 if p in manual:
                     lo[p] = min(lo[p], manual[p]["annual"])
                     hi[p] = max(hi[p], manual[p]["annual"])
-            own = {p: data["targets"].get(p, np.nan) * prod_year[p] / 1e6 for p in sim_pl}
+            for p in sim_pl:  # refugo base zero (comum num único mês) -> faixa mínima para o slider
+                hi[p] = max(hi[p], lo[p] + 1)
+            own = {p: data["targets"].get(p, np.nan) * s_prod[p] / 1e6 for p in sim_pl}
             step = {p: max(1, int((hi[p] - lo[p]) / 400)) for p in sim_pl}
             tag = "_".join(sim_pl)
-            keys = {p: f"sim_{tag}_{p}" for p in sim_pl}
+            keys = {p: f"sim_{MODE_TAG}_{tag}_{p}" for p in sim_pl}
             for p in sim_pl:
                 if p in manual and keys[p] not in ss:
                     ss[keys[p]] = int(round(manual[p]["annual"]))
@@ -1220,12 +1292,12 @@ with tab4:
 
             if len(sim_pl) == 3:
                 fixed_p = st.radio("Plano de corte (planta com valor fixo)", sim_pl, horizontal=True,
-                                   key=f"sim_plane_{tag}")
+                                   key=f"sim_plane_{MODE_TAG}_{tag}")
                 pa, pb = [p for p in sim_pl if p != fixed_p]
             else:
                 fixed_p = None
                 pa, pb = sim_pl
-            chart_key = f"sim_chart_{tag}_{fixed_p}"
+            chart_key = f"sim_chart_{MODE_TAG}_{tag}_{fixed_p}"
 
             # Clique no gráfico 2D -> move o ponto analisado
             try:
@@ -1237,14 +1309,14 @@ with tab4:
                 sig = (round(pts[0]["x"], 1), round(pts[0]["y"], 1))  # eixos em PPM
                 if ss.get(f"{chart_key}_last") != sig:
                     ss[f"{chart_key}_last"] = sig
-                    ss[keys[pa]] = int(np.clip(sig[0] * prod_year[pa] / 1e6, lo[pa], hi[pa]))
-                    ss[keys[pb]] = int(np.clip(sig[1] * prod_year[pb] / 1e6, lo[pb], hi[pb]))
+                    ss[keys[pa]] = int(np.clip(sig[0] * s_prod[pa] / 1e6, lo[pa], hi[pa]))
+                    ss[keys[pb]] = int(np.clip(sig[1] * s_prod[pb] / 1e6, lo[pb], hi[pb]))
 
             def reset_point():
                 for k in list(ss.keys()):
-                    if str(k).startswith(("sim_chart_", f"sim_{tag}_")):
+                    if str(k).startswith((f"sim_chart_{MODE_TAG}_", f"sim_{MODE_TAG}_{tag}_")):
                         del ss[k]
-                ss["sim_manual"] = {}
+                ss[MAN_KEY] = {}
                 ss["pt_editor_ver"] = ss.get("pt_editor_ver", 0) + 1
 
             h1, h2 = st.columns([3, 1])
@@ -1254,10 +1326,9 @@ with tab4:
                            "cenário projetado a partir dos dados do arquivo Excel.")
             slider_order = ([fixed_p] if fixed_p else []) + [pa, pb]
             for col, p in zip(st.columns(len(slider_order)), slider_order):
-                col.slider(f"Refugo anual — {p}" + (" (plano)" if p == fixed_p else ""),
+                col.slider(f"Refugo {U_PER} {PER} — {p}" + (" (plano)" if p == fixed_p else ""),
                            int(lo[p]), int(hi[p]), step=step[p], key=keys[p], format="%d")
-                col.caption(f"= **{fmt_num(ss[keys[p]] / prod_year[p] * 1e6)} PPM** · real {fmt_num(real_scrap[p])} pç · "
-                            f"projeção atual {fmt_num(cur_annual[p])} pç · meta {fmt_num(own[p])} pç")
+                col.caption(f"= **{fmt_num(ss[keys[p]] / s_prod[p] * 1e6)} PPM** · " + (f"real {fmt_num(s_real[p])} pç · " if not SIM_MES else "") + f"{'valor real' if SIM_MES and sim_m_real else 'projeção atual'} {fmt_num(cur_annual[p])} pç · meta {fmt_num(own[p])} pç")
             point = {p: float(ss[keys[p]]) for p in sim_pl}
             for p in sim_pl:  # slider/clique moveu a planta -> deixa de ser edição manual
                 if p in manual and int(point[p]) != int(round(manual[p]["annual"])):
@@ -1266,12 +1337,12 @@ with tab4:
             slack = allowed - others_sum - sum(point.values())
 
             m1, m2, m3 = st.columns(3)
-            m1.metric(f"PPM {REGION} no ponto", fmt_num(ppm_pt),
+            m1.metric(f"PPM {REGION} {PER} no ponto", fmt_num(ppm_pt),
                       delta=f"{fmt_num(ppm_pt - region_target)} vs target", delta_color="inverse",
-                      help="(Σ refugo anual das plantas selecionadas no ponto + Σ refugo anual das demais) ÷ "
-                           "Produção total BU1 SA × 10⁶.")
+                      help=f"(Σ refugo do {U_PER} das plantas selecionadas no ponto + Σ refugo do {U_PER} das demais) ÷ "
+                           f"Produção total BU1 SA no {U_PER} × 10⁶.")
             m2.metric("Folga até o target (peças)", fmt_num(slack),
-                      help="Target BU1 SA × Produção BU1 SA ÷ 10⁶ − Σ refugo anual de todas as plantas. "
+                      help=f"Target BU1 SA × Produção BU1 SA do {U_PER} ÷ 10⁶ − Σ refugo do {U_PER} de todas as plantas. "
                            "Positivo = ainda cabe esse refugo; negativo = precisa reduzir isso.")
             m3.metric("Situação vs target", "✅ Dentro" if slack >= 0 else "❌ Fora")
 
@@ -1282,7 +1353,7 @@ with tab4:
             # Eixos dos gráficos em PPM da planta (refugo anual ÷ produção anual × 10⁶);
             # o hover mostra as peças e a diferença em relação à projeção atual.
             def ppm_of(p, q):
-                return q / prod_year[p] * 1e6
+                return q / s_prod[p] * 1e6
 
             N_CD = 4  # valores de customdata por planta
 
@@ -1292,8 +1363,10 @@ with tab4:
                 return (f"<b>{p}</b>: %{{{axis}:,.0f}} PPM<br>"
                         f"&nbsp;&nbsp;refugo: %{{customdata[{k}]:,.0f}} pç<br>"
                         f"&nbsp;&nbsp;Δ vs projeção atual: %{{customdata[{k + 1}]:+,.0f}} pç<br>"
-                        f"&nbsp;&nbsp;variação necessária: <b>%{{customdata[{k + 2}]:+,.1f}}%</b> no ano · "
-                        f"<b>%{{customdata[{k + 3}]:+,.1f}}%</b> nos meses projetados<br>")
+                        + (f"&nbsp;&nbsp;variação necessária: <b>%{{customdata[{k + 2}]:+,.1f}}%</b> no mês<br>"
+                           if SIM_MES else
+                           f"&nbsp;&nbsp;variação necessária: <b>%{{customdata[{k + 2}]:+,.1f}}%</b> no ano · "
+                           f"<b>%{{customdata[{k + 3}]:+,.1f}}%</b> nos meses projetados<br>"))
 
             def custom(pairs):
                 """pairs: [(planta, array de peças)] -> customdata no último eixo:
@@ -1301,7 +1374,7 @@ with tab4:
                 cols = []
                 for p, q in pairs:
                     delta = q - cur_annual[p]
-                    proj_cur = cur_annual[p] - real_scrap[p]
+                    proj_cur = cur_annual[p] - s_real[p]
                     cols += [q, delta, delta / cur_annual[p] * 100,
                              delta / proj_cur * 100 if proj_cur else np.full_like(np.asarray(q, float), np.nan)]
                 return np.stack(cols, axis=-1)
@@ -1351,13 +1424,13 @@ with tab4:
                                    customdata=custom([(px_, pt3[px_]), (py_, pt3[py_]), (pz_, pt3[pz_])]),
                                    hovertemplate=hov3 + f"PPM {REGION}: {fmt_num(ppm_pt)}<extra>Ponto</extra>")
                 fig3.update_layout(
-                    title=f"Fronteira do target {REGION} — abaixo da superfície = dentro do target",
+                    title=f"Fronteira do target {REGION} {PER} — abaixo da superfície = dentro do target",
                     scene=dict(xaxis=dict(title=f"{px_} (PPM)", tickformat=",.0f"),
                                yaxis=dict(title=f"{py_} (PPM)", tickformat=",.0f"),
                                zaxis=dict(title=f"{pz_} (PPM)", tickformat=",.0f")),
                     separators=",.",
                     height=650, legend=dict(orientation="h", y=-0.05), margin=dict(l=0, r=0, t=50, b=0))
-                st.plotly_chart(fig3, width="stretch", key=f"sim3d_{tag}")
+                st.plotly_chart(fig3, width="stretch", key=f"sim3d_{MODE_TAG}_{tag}")
 
             # ---------------- 2D (gráfico próprio ou corte do 3D)
             fixed_val = point[fixed_p] if fixed_p else 0.0
@@ -1411,42 +1484,46 @@ with tab4:
                             hovertemplate=hov2 + f"PPM {REGION}: {fmt_num(ppm_pt)}<extra>Ponto analisado</extra>")
             fig.update_layout(
                 title=(f"Corte no plano {fixed_p} = {fmt_num(ppm_of(fixed_p, fixed_val))} PPM — " if fixed_p else "")
-                      + f"{pa} × {pb}: abaixo da linha preta = dentro do target",
-                xaxis_title=f"Refugo {pa} (PPM ano)", yaxis_title=f"Refugo {pb} (PPM ano)", height=560,
+                      + f"{pa} × {pb} ({PER}): abaixo da linha da fronteira = dentro do target",
+                xaxis_title=f"Refugo {pa} (PPM {U_PER})", yaxis_title=f"Refugo {pb} (PPM {U_PER})", height=560,
                 legend=dict(orientation="h", y=-0.15), separators=",.")
             fig.update_xaxes(range=[ppm_of(pa, lo[pa]), ppm_of(pa, hi[pa])], tickformat=",.0f")
             fig.update_yaxes(range=[ppm_of(pb, lo[pb]), ppm_of(pb, hi[pb])], tickformat=",.0f")
             st.plotly_chart(fig, width="stretch", key=chart_key, on_select="rerun", selection_mode="points")
 
-            # ---------------- Tabela do ponto (editável: PPM ou Refugo ano)
+            # ---------------- Tabela do ponto (editável: PPM ou Refugo do período)
             n_proj = max(len(data["projected"]), 1)
+            C_YOY = "Δ PPM vs mesmo mês ano ant. (%)" if SIM_MES else "Δ PPM vs ano ant. (%)"
             rows = []
             for p in plants:
                 annual = point.get(p, cur_annual[p])
                 tg = data["targets"].get(p, np.nan)
-                ppm_p = annual / prod_year[p] * 1e6
+                ppm_p = annual / s_prod[p] * 1e6
                 ed = manual.get(p)
-                rows.append({"Planta": p + (" ★" if p in sim_pl else ""),
-                             "Edição": f"✏️ {ed['col']} manual" if ed else "",
-                             "PPM": ppm_p, "Refugo ano": annual,
-                             "Refugo meses proj.": annual - real_scrap[p],
-                             "Refugo médio/mês proj.": (annual - real_scrap[p]) / n_proj,
-                             "Variação vs base (%)": ((annual - real_scrap[p]) / proj_scrap0[p] - 1) * 100,
-                             "Produção ano": prod_year[p], "Target PPM": tg,
-                             "Desvio %": (ppm_p - tg) / tg * 100, "Status": "✅ Dentro" if ppm_p <= tg else "❌ Fora",
-                             "Δ PPM vs ano ant. (%)": pct(ppm_p, prev_ppm[p])})
+                row = {"Planta": p + (" ★" if p in sim_pl else ""),
+                       "Edição": f"✏️ {ed['col']} manual" if ed else "",
+                       "PPM": ppm_p, C_REF: annual}
+                if not SIM_MES:
+                    row["Refugo meses proj."] = annual - s_real[p]
+                    row["Refugo médio/mês proj."] = (annual - s_real[p]) / n_proj
+                row.update({"Variação vs base (%)": ((annual - s_real[p]) / s_base[p] - 1) * 100,
+                            C_PROD: s_prod[p], "Target PPM": tg,
+                            "Desvio %": (ppm_p - tg) / tg * 100, "Status": "✅ Dentro" if ppm_p <= tg else "❌ Fora",
+                            C_YOY: pct(ppm_p, s_prev_ppm[p])})
+                rows.append(row)
             pt_df = pd.DataFrame(rows).set_index("Planta")
-            tot = pt_df[["Refugo ano", "Refugo meses proj.", "Refugo médio/mês proj.", "Produção ano"]].sum()
+            sum_cols = [C_REF, C_PROD] + ([] if SIM_MES else ["Refugo meses proj.", "Refugo médio/mês proj."])
+            tot = pt_df[sum_cols].sum()
             pt_df.loc[REGION] = {**tot.to_dict(), "Edição": "", "Variação vs base (%)": np.nan, "PPM": ppm_pt,
                                  "Target PPM": region_target, "Desvio %": (ppm_pt - region_target) / region_target * 100,
                                  "Status": "✅ Dentro" if slack >= 0 else "❌ Fora",
-                                 "Δ PPM vs ano ant. (%)": pct(ppm_pt, prev_ppm[REGION])}
+                                 C_YOY: pct(ppm_pt, s_prev_ppm[REGION])}
             row_plants = plants + [REGION]
-            editable = ["PPM", "Refugo ano"]
+            editable = ["PPM", C_REF]
 
             def on_point_edit(editor_key, keys_map):
                 changes = ss[editor_key].get("edited_rows", {})
-                man = ss.setdefault("sim_manual", {})
+                man = ss.setdefault(MAN_KEY, {})
                 for r, ch in changes.items():
                     p = row_plants[int(r)]
                     if p == REGION:
@@ -1454,18 +1531,18 @@ with tab4:
                     for col, val in ch.items():
                         if val is None or col not in editable:
                             continue
-                        annual = float(val) * prod_year[p] / 1e6 if col == "PPM" else float(val)
+                        annual = float(val) * s_prod[p] / 1e6 if col == "PPM" else float(val)
                         annual = max(annual, 0.0)
                         man[p] = {"col": col, "annual": annual}
                         if p in keys_map:
                             ss[keys_map[p]] = int(round(annual))
                 ss["pt_editor_ver"] = ss.get("pt_editor_ver", 0) + 1
 
-            st.subheader("Valores no ponto analisado (★ = plantas do gráfico)")
-            st.caption("✏️ Edite **PPM** ou **Refugo ano** de qualquer planta (ex.: Itajubá = 39.000 PPM) para simular "
+            st.subheader(f"Valores no ponto analisado — {PER} (★ = plantas do gráfico)")
+            st.caption(f"✏️ Edite **PPM** ou **{C_REF}** de qualquer planta (ex.: Itajubá = 39.000 PPM) para simular "
                        "o cenário. Linhas editadas ficam destacadas em amarelo; plantas ★ movem o ponto do gráfico, "
                        "as demais mudam a fronteira. A linha BU1 SA é calculada (edições nela são ignoradas).")
-            edit_key = f"pt_editor_{ss.get('pt_editor_ver', 0)}"
+            edit_key = f"pt_editor_{MODE_TAG}_{ss.get('pt_editor_ver', 0)}"
             hl = "background-color: rgba(255, 213, 79, 0.45); font-weight: 600"
             styler = (pt_df.style
                       .format({c: (lambda x: fmt_num(x, 1) + "%") if "%" in c else fmt_num
@@ -1474,23 +1551,32 @@ with tab4:
             cfg = {c: st.column_config.Column(help=HELP.get(c)) for c in pt_df.columns if c in HELP}
             cfg["PPM"] = st.column_config.NumberColumn(
                 "PPM ✏️", format="localized", min_value=0.0, step=1.0,
-                help="EDITÁVEL. Refugo ano ÷ Produção ano × 10⁶. Ao editar: Refugo ano = PPM × Produção ano ÷ 10⁶.")
-            cfg["Refugo ano"] = st.column_config.NumberColumn(
-                "Refugo ano ✏️", format="localized", min_value=0.0, step=1.0,
-                help="EDITÁVEL. Peças refugadas no ano (real + projetado). Ao editar, o PPM é recalculado.")
+                help=f"EDITÁVEL. {C_REF} ÷ {C_PROD} × 10⁶. Ao editar: {C_REF} = PPM × {C_PROD} ÷ 10⁶.")
+            cfg[C_REF] = st.column_config.NumberColumn(
+                f"{C_REF} ✏️", format="localized", min_value=0.0, step=1.0,
+                help=(f"EDITÁVEL. Peças refugadas em {PER} ({'real' if sim_m_real else 'projetado'}). "
+                      if SIM_MES else "EDITÁVEL. Peças refugadas no ano (real + projetado). ")
+                     + "Ao editar, o PPM é recalculado.")
+            if SIM_MES:
+                cfg[C_PROD] = st.column_config.Column(
+                    help=f"Peças produzidas em {PER} ({'real' if sim_m_real else 'projeção atual'}).")
+                cfg["Variação vs base (%)"] = st.column_config.Column(
+                    help=f"({C_REF} ÷ refugo {'real' if sim_m_real else 'projetado base'} do mês − 1) × 100.")
+                cfg[C_YOY] = st.column_config.Column(
+                    help=f"(PPM {PER} ÷ PPM {MESES[sim_m - 1]}/{prev_year} − 1) × 100. Positivo = piora.")
             cfg["Edição"] = st.column_config.TextColumn("Edição", help="Mostra se o valor da planta foi editado manualmente.")
             st.data_editor(styler, column_config=cfg, disabled=[c for c in pt_df.columns if c not in editable],
                            width="stretch", key=edit_key, on_change=on_point_edit, args=(edit_key, keys))
             e1, e2 = st.columns([1, 3])
             if e1.button("🧹 Limpar edições manuais", disabled=not manual, key="clear_manual"):
-                ss["sim_manual"] = {}
+                ss[MAN_KEY] = {}
                 for p in sim_pl:
                     ss.pop(keys[p], None)
                 ss["pt_editor_ver"] = ss.get("pt_editor_ver", 0) + 1
                 st.rerun()
             if manual:
                 e2.info("Edições ativas: " + "; ".join(
-                    f"{p}: {fmt_num(v['annual'])} pç/ano ({fmt_num(v['annual'] / prod_year[p] * 1e6)} PPM)"
+                    f"{p}: {fmt_num(v['annual'])} pç/{U_PER} ({fmt_num(v['annual'] / s_prod[p] * 1e6)} PPM)"
                     for p, v in manual.items()))
             with st.popover("ℹ️ Memorial de cálculo — Ponto analisado"):
                 for c in pt_df.columns:
@@ -1533,6 +1619,10 @@ with tab5:
                 "uma reta (2 plantas) ou um plano (3 plantas). Variação uniforme v de uma combinação C:")
     st.latex(r"v = \frac{Refugo_{permitido,BU1} - \sum Refugo_{real} - \sum_{i \notin C} Refugo_{proj,i}(1+v_i)}"
              r"{\sum_{i \in C} Refugo_{proj,base,i}} - 1")
+    st.markdown("**Simulador por mês** (botão *🗓️ Mês*): a mesma fronteira, aplicada a um único mês do ano da "
+                "projeção. Mês realizado usa produção e refugo reais; mês projetado usa a produção projetada e o "
+                "refugo projetado do cenário atual.")
+    st.latex(r"\sum_{i} Refugo_{m,i} \le \frac{Target_{BU1\,SA} \times \sum_i Prod_{m,i}}{10^6}")
 
     st.subheader("8. Exemplo numérico com o cenário atual")
     ex = st.selectbox("Planta", plants, key="memo_plant")

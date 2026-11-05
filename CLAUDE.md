@@ -79,6 +79,12 @@ planilha de exemplo e confira as abas afetadas (e o Memorial de cálculo).
 - Use a API atual do Streamlit (`width="stretch"` em vez de `use_container_width`).
 - Mantenha o app em arquivo único, salvo pedido explícito para modularizar.
 
+- **Modo noturno**: a chave `tema_escuro` troca as opções `theme.*` via `st._config.set_option` e reexecuta
+  (não há API pública). Cores fixas de linhas de referência (`COR_TARGET`, `COR_REGIAO`) são redefinidas no
+  modo escuro; evite novas cores fixas que sumam em fundo escuro.
+- **Simulador (Ano/Mês)**: a aba trabalha com grandezas do período (`s_real`, `s_base`, `s_prod`, `s_cur`);
+  chaves de estado levam `MODE_TAG` para separar ano e cada mês.
+
 ## Cuidados
 
 - **Não versionar dados reais** (`*.xlsx` com produção/refugo das plantas) — estão no `.gitignore`.

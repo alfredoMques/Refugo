@@ -4,7 +4,7 @@
 |---|---|
 | Produto | Dashboard de avaliação/simulação de refugo |
 | Versão do app | v3 (`app_refugo_v3.py`) |
-| Data | 03/11/2026 |
+| Data | 05/11/2026 |
 | Status | Rascunho — documenta o comportamento atual |
 
 ## 1. Objetivo
@@ -74,7 +74,8 @@ de edições entre sessões (as edições vivem apenas na sessão do navegador).
   - Média do ano anterior *(se houver ano anterior)*;
   - Mesmo mês do ano anterior *(se houver; sem dado → média do ano anterior)*.
 - **RF-10** — Seleção do período do **PPM base**: média do ano, mesmo período da produção ou ano anterior.
-- **RF-11** — Botão **Restaurar padrões** que limpa todo o estado da sessão.
+- **RF-11** — Botão **Restaurar padrões** que limpa todo o estado da sessão (exceto a escolha do tema).
+- **RF-11a** — Chave **🌙 Modo noturno** que alterna entre tema claro e escuro (telas, tabelas e gráficos).
 
 ### 5.3 Cabeçalho e indicadores
 
@@ -125,6 +126,9 @@ de edições entre sessões (as edições vivem apenas na sessão do navegador).
 - **RF-30** — Exibir a fronteira em que o PPM BU1 SA fica exatamente no target e o ponto analisado; clique
   no gráfico 2D move o ponto.
 - **RF-31** — Tabela "Valores no ponto analisado" editável, permitindo fixar o refugo anual de plantas.
+- **RF-31a** — Botão de período da simulação **📅 Ano / 🗓️ Mês**. No modo mês, o usuário escolhe qualquer mês
+  do ano da projeção (realizado ou projetado) e a simulação usa refugo, produção e PPM apenas desse mês; a
+  comparação com o ano anterior usa o mesmo mês. Pontos e edições ficam separados por período.
 
 ### 5.10 Aba "Dados de entrada"
 
@@ -160,7 +164,8 @@ de edições entre sessões (as edições vivem apenas na sessão do navegador).
 | RN-11 | `Refugo permitido = Target × Prod_ano ÷ 10⁶ − Refugo_real`; `Var_nec = Refugo_permitido ÷ Refugo_proj,base − 1` |
 | RN-12 | Com produção fixa, a fronteira do target é linear nas quantidades refugadas (reta em 2D, plano em 3D) |
 | RN-13 | Combinação viável se a variação uniforme necessária for ≥ −100% |
-| RN-14 | Análises de projeção (Sensibilidade, Combinações, Simulador) só se aplicam quando há meses projetados |
+| RN-14 | Análises de projeção (Sensibilidade, Combinações e Simulador no modo ano) só se aplicam quando há meses projetados |
+| RN-15 | Simulador no modo mês: `Σ Refugo_m ≤ Target_BU1 × Σ Prod_m ÷ 10⁶` para o mês m escolhido |
 
 ## 7. Requisitos não funcionais
 
